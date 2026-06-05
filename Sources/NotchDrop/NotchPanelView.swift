@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Preference Key for file row frames
+// MARK: - Preference Key for file row frames (in global coordinates)
 
 struct FileFrameKey: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
@@ -15,10 +15,11 @@ struct NotchPanelView: View {
     @ObservedObject var viewModel: NotchDropManager
     @AppStorage("language") private var _language = ""
 
+    // Rubber‑band selection state
     @State private var selStart: CGPoint? = nil
     @State private var selEnd: CGPoint? = nil
     @State private var fileFrames: [UUID: CGRect] = [:]
-    @State private var listFrame: CGRect = .zero
+    @State private var listGlobalFrame: CGRect = .zero
 
     private var selRect: CGRect? {
         guard let s = selStart, let e = selEnd else { return nil }
@@ -66,84 +67,108 @@ struct NotchPanelView: View {
         .frame(maxHeight: .infinity).padding(.horizontal, 20).padding(.bottom, 30)
     }
 
-    // MARK: - File List with Rubber‑band Selection
+    // MARK: - File List + Selection
 
     private var fileListView: some View {
         VStack(spacing: 0) {
             // Header
-            HStack {
-                Text(L.appName).font(.system(size: 13, weight: .semibold)).foregroundColor(.primary)
-                Spacer()
-                if viewModel.selectedFileIDs.isEmpty {
-                    Text("\(viewModel.files.count)\(L.files)").font(.system(size: 11)).foregroundColor(.secondary)
-                    Button(action: { viewModel.selectAll() }) { Text("全选").font(.system(size: 9)) }
-                        .buttonStyle(.plain).foregroundColor(.blue.opacity(0.7)).padding(.leading, 4)
-                    Button(action: { viewModel.removeAll() }) { Image(systemName: "trash").font(.system(size: 10)) }
-                        .buttonStyle(.plain).foregroundColor(.secondary).help("全部移回原位置").padding(.leading, 4)
-                } else {
-                    Text("已选 \(viewModel.selectedFileIDs.count) 个").font(.system(size: 11)).foregroundColor(.blue)
-                    Button(action: { viewModel.restoreSelected() }) {
-                        Image(systemName: "arrowshape.turn.up.left").font(.system(size: 10))
-                        Text("移回").font(.system(size: 10))
-                    }.buttonStyle(.plain).foregroundColor(.blue).padding(.leading, 4)
-                    Button(action: { viewModel.deselectAll() }) { Text("取消").font(.system(size: 9)) }
-                        .buttonStyle(.plain).foregroundColor(.secondary).padding(.leading, 2)
-                }
-            }
-            .padding(.horizontal, 16).padding(.bottom, 8)
+            headerView
 
-            // Scrollable list with rubber‑band drag
-            ScrollView { listContent }
+            // Scrollable list — rubber‑band gesture is attached to the ScrollView
+            ScrollView { fileRows }
                 .scrollIndicators(.automatic)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 3, coordinateSpace: .global)
+                        .onChanged { val in
+                            if selStart == nil {
+                                selStart = val.startLocation
+                                viewModel.deselectAll()
+                            }
+                            selEnd = val.location
+                            updateSelection()
+                        }
+                        .onEnded { _ in
+                            selStart = nil; selEnd = nil
+                        }
+                )
         }
         .frame(maxHeight: .infinity)
     }
 
+    /// Select files whose global frames intersect the current selection rect.
+    private func updateSelection() {
+        guard let rect = selRect else { return }
+        viewModel.selectFiles(in: rect, frames: fileFrames)
+    }
+
+    // MARK: - Header
+
     @ViewBuilder
-    private var listContent: some View {
+    private var headerView: some View {
+        HStack {
+            Text(L.appName).font(.system(size: 13, weight: .semibold)).foregroundColor(.primary)
+            Spacer()
+            if viewModel.selectedFileIDs.isEmpty {
+                Text("\(viewModel.files.count)\(L.files)").font(.system(size: 11)).foregroundColor(.secondary)
+                Button(action: { viewModel.selectAll() }) { Text("全选").font(.system(size: 9)) }
+                    .buttonStyle(.plain).foregroundColor(.blue.opacity(0.7)).padding(.leading, 4)
+                Button(action: { viewModel.removeAll() }) { Image(systemName: "trash").font(.system(size: 10)) }
+                    .buttonStyle(.plain).foregroundColor(.secondary).help("全部移回原位置").padding(.leading, 4)
+            } else {
+                Text("已选 \(viewModel.selectedFileIDs.count) 个").font(.system(size: 11)).foregroundColor(.blue)
+                Button(action: { viewModel.restoreSelected() }) {
+                    Image(systemName: "arrowshape.turn.up.left").font(.system(size: 10))
+                    Text("移回").font(.system(size: 10))
+                }.buttonStyle(.plain).foregroundColor(.blue).padding(.leading, 4)
+                Button(action: { viewModel.deselectAll() }) { Text("取消").font(.system(size: 9)) }
+                    .buttonStyle(.plain).foregroundColor(.secondary).padding(.leading, 2)
+            }
+        }
+        .padding(.horizontal, 16).padding(.bottom, 8)
+    }
+
+    // MARK: - File Rows
+
+    private var fileRows: some View {
         VStack(spacing: 4) {
             ForEach(Array(viewModel.files.enumerated()), id: \.element.id) { idx, file in
-                SelectableFileRow(index: idx, file: file,
-                                  isSelected: viewModel.selectedFileIDs.contains(file.id),
-                                  viewModel: viewModel)
-                    .background(GeometryReader { g in
-                        Color.clear.preference(key: FileFrameKey.self,
-                            value: [file.id: g.frame(in: .named("filelist"))])
-                    })
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
-                        removal: .move(edge: .bottom).combined(with: .opacity)))
+                SelectableFileRow(
+                    index: idx,
+                    file: file,
+                    isSelected: viewModel.selectedFileIDs.contains(file.id),
+                    viewModel: viewModel
+                )
+                .background(GeometryReader { g in
+                    Color.clear.preference(
+                        key: FileFrameKey.self,
+                        value: [file.id: g.frame(in: .global)]
+                    )
+                })
+                .transition(.asymmetric(
+                    insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .move(edge: .bottom).combined(with: .opacity)))
             }
         }
         .padding(.horizontal, 10).padding(.bottom, 12)
-        .coordinateSpace(name: "filelist")
         .background(GeometryReader { g in
-            Color.clear.onAppear { listFrame = g.frame(in: .global) }
+            Color.clear.onAppear { listGlobalFrame = g.frame(in: .global) }
         })
         .onPreferenceChange(FileFrameKey.self) { fileFrames = $0 }
+        // Overlay the rubber‑band selection rect
         .overlay {
-            if let r = selRect { Rectangle()
-                .fill(.blue.opacity(0.08)).stroke(.blue.opacity(0.4), lineWidth: 1)
-                .frame(width: r.width, height: r.height)
-                .position(x: r.midX, y: r.midY)
+            if let r = selRect {
+                // Convert global rect to local coordinate
+                let localRect = CGRect(
+                    x: r.minX - listGlobalFrame.minX,
+                    y: r.minY - listGlobalFrame.minY,
+                    width: r.width, height: r.height
+                )
+                Rectangle()
+                    .fill(.blue.opacity(0.08)).stroke(.blue.opacity(0.4), lineWidth: 1)
+                    .frame(width: localRect.width, height: localRect.height)
+                    .position(x: localRect.midX, y: localRect.midY)
             }
         }
-        .gesture(
-            DragGesture(minimumDistance: 3, coordinateSpace: .named("filelist"))
-                .onChanged { val in
-                    if selStart == nil {
-                        selStart = val.startLocation
-                        viewModel.deselectAll()
-                    }
-                    selEnd = val.location
-                    if let rect = selRect {
-                        viewModel.selectFiles(in: rect, frames: fileFrames)
-                    }
-                }
-                .onEnded { _ in
-                    selStart = nil; selEnd = nil
-                }
-        )
     }
 }
 
@@ -181,7 +206,20 @@ struct SelectableFileRow: View {
         }
         .onDrag {
             let p = NSItemProvider(object: file.url as NSURL)
-            p.suggestedName = file.name; viewModel.removeFileFromPanel(file); return p
+            p.suggestedName = file.name
+            // Multi‑selection: register all selected files on the pasteboard
+            if isSelected && viewModel.selectedFileIDs.count > 1 {
+                for f in viewModel.selectedFiles where f.id != file.id {
+                    p.registerObject(f.url as NSURL, visibility: .all)
+                }
+            }
+            let toRemove = isSelected && viewModel.selectedFileIDs.count > 1
+                ? viewModel.selectedFiles
+                : [file]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak vm = viewModel] in
+                for f in toRemove { vm?.removeFileFromPanel(f) }
+            }
+            return p
         }
         .contextMenu {
             Button("打开") { viewModel.openFile(file) }

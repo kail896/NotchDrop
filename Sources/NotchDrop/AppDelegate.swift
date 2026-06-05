@@ -17,21 +17,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildStatusBar()
         notchWindow = NotchWindow(viewModel: viewModel)
-        // Collapse panel when all files are removed
-        viewModel.onFilesEmpty = { [weak self] in
-            self?.notchWindow?.collapsePanel()
-        }
-        // Reset auto-hide timer when user interacts with the panel
-        viewModel.onUserInteraction = { [weak self] in
-            self?.notchWindow?.userDidInteract()
-        }
+        viewModel.onFilesEmpty = { [weak self] in self?.notchWindow?.collapsePanel() }
+        viewModel.onUserInteraction = { [weak self] in self?.notchWindow?.userDidInteract() }
         dragTrigger = DragTriggerStrip(delegate: self)
         dragTrigger?.orderFront(nil)
         registerKeyboardShortcut()
+        if AppSettings.shared.rememberFiles { viewModel.restoreSavedFiles() }
+        viewModel.cleanOrphanedStorage()
+    }
 
-        if AppSettings.shared.rememberFiles {
-            viewModel.restoreSavedFiles()
-        }
+    func applicationWillTerminate(_ notification: Notification) {
+        viewModel.prepareForQuit()
     }
 
     // MARK: - Status Bar
