@@ -25,6 +25,9 @@ echo "▸ Copying app icon..."
 if [ -f "AppIcon.icns" ]; then
     cp "AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/"
 fi
+if [ -f "MenuBarIcon.png" ]; then
+    cp "MenuBarIcon.png" "${APP_BUNDLE}/Contents/Resources/"
+fi
 
 echo ""
 echo "✅  ${APP_BUNDLE} created."
