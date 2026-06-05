@@ -38,12 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if let button = statusItem?.button {
-            if let img = NSImage(contentsOf: Bundle.main.resourceURL?.appendingPathComponent("MenuBarIcon.png") ?? URL(fileURLWithPath: "")) {
-                img.isTemplate = true
-                button.image = img
-            } else {
-                button.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "NotchDrop")
-            }
+            button.image = NSImage(systemSymbolName: "tray.and.arrow.down.fill",
+                                   accessibilityDescription: "NotchDrop")
             button.action = #selector(handleStatusBarClick)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
