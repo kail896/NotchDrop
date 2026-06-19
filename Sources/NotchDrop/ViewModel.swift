@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 
+/// Central state — files are **copied** into cache storage but the original
+/// file stays at its source location.  The panel references the cache for its
+/// own use; drag‑out provides the original URL so the destination gets the real file.
 @MainActor
 class NotchDropManager: ObservableObject {
     @Published var files: [StoredFile] = []
@@ -42,41 +45,28 @@ class NotchDropManager: ObservableObject {
         onUserInteraction?()
     }
 
-    // MARK: - Storage Directory
+    // MARK: - Cache Directory
 
-    private static let storageDir: URL = {
+    private static let cacheDir: URL = {
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        let dir = paths[0].appendingPathComponent("NotchDrop/Storage", isDirectory: true)
+        let dir = paths[0].appendingPathComponent("NotchDrop/Cache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
 
-    // MARK: - File Ingestion
-
-    /// Move `src` into internal storage. Returns the storage URL on success.
-    /// **Safety contract**: if we return a URL, the file is safely in storage.
-    /// The original is deleted only AFTER a confirmed copy.
-    private static func ingest(_ src: URL) -> URL? {
-        let dest = storageDir.appendingPathComponent(src.lastPathComponent)
-        // Remove any stale file at destination (internal storage only)
-        try? FileManager.default.removeItem(at: dest)
+    /// Copy source into cache.  Original file is NOT touched.
+    private static func cache(_ src: URL) -> URL? {
+        let dest = cacheDir.appendingPathComponent(src.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)  // overwrite stale cache
         do {
             try FileManager.default.copyItem(at: src, to: dest)
-            // Copy confirmed — now safe to remove the original.
-            try FileManager.default.removeItem(at: src)
             return dest
         } catch {
-            // If copy succeeded but remove failed, the storage copy exists.
-            // Rather than returning nil (which would orphan it), check and return dest.
-            if FileManager.default.fileExists(atPath: dest.path) {
-                return dest  // storage copy exists, orphan is better than data loss
-            }
-            NSLog("NotchDrop: ingest error \(error.localizedDescription)")
+            NSLog("NotchDrop: cache error \(error.localizedDescription)")
             return nil
         }
     }
 
-    /// Permanently delete a storage copy.
     private static func evict(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
     }
@@ -93,103 +83,65 @@ class NotchDropManager: ObservableObject {
         let isTemp = resolved.path.hasPrefix("/var/") || resolved.path.hasPrefix("/private/var/")
         if isTemp && droppedSize > 0 && files.contains(where: { $0.size == droppedSize }) { return }
 
-        guard let stored = Self.ingest(resolved) else { return }
+        // Only create a cache copy — the original file stays in place.
+        guard let cached = Self.cache(resolved) else { return }
 
-        let file = StoredFile(url: stored, originalURL: resolved)
+        let file = StoredFile(url: cached, originalURL: resolved)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { files.append(file) }
         persistFiles()
     }
 
-    /// Restore single file to its original location. If restore fails, the file
-    /// stays in the panel and the storage copy is preserved.
+    /// Remove file — the original is still at originalURL, just clean the cache.
     func removeFile(_ file: StoredFile) {
-        let ok = restoreToOriginal(file)
-        if ok {
-            withAnimation(.easeOut(duration: 0.2)) { files.removeAll { $0.id == file.id } }
-            persistFiles(); cleanOrphanedStorage(); if files.isEmpty { onFilesEmpty?() }
-        }
+        Self.evict(file.url)
+        withAnimation(.easeOut(duration: 0.2)) { files.removeAll { $0.id == file.id } }
+        persistFiles(); cleanOrphanedCache(); if files.isEmpty { onFilesEmpty?() }
     }
 
+    /// Restore selected files — they're already at originalURL, just clean caches.
     func restoreSelected() {
-        let toRestore = selectedFiles; deselectAll()
-        var failed: [StoredFile] = []
-        for f in toRestore {
-            if !restoreToOriginal(f) { failed.append(f) }
+        let toRemove = selectedFiles; deselectAll()
+        for f in toRemove { Self.evict(f.url) }
+        withAnimation(.easeOut(duration: 0.2)) {
+            files.removeAll { f in toRemove.contains(where: { $0.id == f.id }) }
         }
-        let succeeded = toRestore.filter { f in !failed.contains(where: { $0.id == f.id }) }
-        if !succeeded.isEmpty {
-            withAnimation(.easeOut(duration: 0.2)) {
-                files.removeAll { f in succeeded.contains(where: { $0.id == f.id }) }
-            }
-        }
-        persistFiles(); cleanOrphanedStorage(); if files.isEmpty { onFilesEmpty?() }
+        persistFiles(); cleanOrphanedCache(); if files.isEmpty { onFilesEmpty?() }
     }
 
+    /// "Restore all" = just clean all caches, remove all references.
     func removeAll() {
-        let all = files
-        var failed: [StoredFile] = []
-        for f in all {
-            if !restoreToOriginal(f) { failed.append(f) }
-        }
-        withAnimation(.easeOut(duration: 0.2)) { files = failed }
-        persistFiles(); cleanOrphanedStorage()
-        if files.isEmpty { onFilesEmpty?() }
+        for f in files { Self.evict(f.url) }
+        withAnimation(.easeOut(duration: 0.2)) { files.removeAll() }
+        persistFiles(); cleanOrphanedCache(); onFilesEmpty?()
     }
 
-    /// Drag-out: remove the panel reference only. Storage file stays until
-    /// the system finishes copying it to the drop destination.
+    /// Drag-out — remove reference and evict cache immediately (no delay needed).
     func removeFileFromPanel(_ file: StoredFile) {
+        Self.evict(file.url)
         withAnimation(.easeOut(duration: 0.2)) {
             files.removeAll { $0.id == file.id }
             selectedFileIDs.remove(file.id)
         }
-        // Delay eviction so the system can finish copying to the drop destination
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-            Self.evict(file.url)
-            self?.cleanOrphanedStorage()
-        }
         persistFiles(); if files.isEmpty { onFilesEmpty?() }
+        onUserInteraction?()
     }
 
-    func openFile(_ file: StoredFile) { NSWorkspace.shared.open(file.url); onUserInteraction?() }
-
-    // MARK: - Restore Helper
-
-    /// Copy the storage file back to its original URL. Returns `true` on success.
-    /// If it fails, the storage file is NOT deleted.
-    private func restoreToOriginal(_ file: StoredFile) -> Bool {
-        let fm = FileManager.default
-        let dest = file.originalURL
-        // Ensure the target directory exists
-        try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Verify storage file still exists
-        guard fm.fileExists(atPath: file.url.path) else {
-            NSLog("NotchDrop: storage file missing for \(file.name)")
-            return false
-        }
-        do {
-            if fm.fileExists(atPath: dest.path) {
-                _ = try fm.replaceItemAt(dest, withItemAt: file.url)
-            } else {
-                try fm.copyItem(at: file.url, to: dest)
-            }
-            // Restore confirmed — safe to evict storage copy
-            Self.evict(file.url)
-            return true
-        } catch {
-            NSLog("NotchDrop: restore failed for \(file.name): \(error.localizedDescription)")
-            return false
-        }
+    /// Open the ORIGINAL file (not the cache copy).
+    func openFile(_ file: StoredFile) {
+        NSWorkspace.shared.open(file.originalURL)
+        onUserInteraction?()
     }
 
-    /// Clean up unreferenced storage files (files in storage/ not in the panel).
-    /// Call on launch to clean up from previous sessions.
-    func cleanOrphanedStorage() {
+    // MARK: - Cache Cleanup
+
+    func cleanOrphanedCache() {
         let activePaths = Set(files.map { $0.url.resolvingSymlinksInPath().path })
         guard let enumerator = FileManager.default.enumerator(
-            at: Self.storageDir, includingPropertiesForKeys: nil
+            at: Self.cacheDir, includingPropertiesForKeys: nil
         ) else { return }
+        let systemFiles: Set<String> = [".DS_Store", "Icon\r", ".localized"]
         for case let url as URL in enumerator {
+            guard !systemFiles.contains(url.lastPathComponent) else { continue }
             let resolved = url.resolvingSymlinksInPath()
             if !activePaths.contains(resolved.path) {
                 try? FileManager.default.removeItem(at: resolved)
@@ -199,19 +151,9 @@ class NotchDropManager: ObservableObject {
 
     // MARK: - Quit
 
-    /// Called when the app is about to terminate.
-    /// Tries to restore all files. Files that cannot be restored stay in storage
-    /// and will be available next launch (if rememberFiles is on).
     func prepareForQuit() {
-        for f in files {
-            if !restoreToOriginal(f) {
-                // File stays in storage — it will be recovered next launch
-                // if rememberFiles is enabled.
-                NSLog("NotchDrop: will NOT restore \(f.name) on quit (storage preserved)")
-            }
-        }
-        // Clean any storage files that aren't in the panel
-        cleanOrphanedStorage()
+        // Clean all caches — originals are still at originalURL.
+        cleanOrphanedCache()
     }
 
     // MARK: - Persistence
@@ -228,8 +170,6 @@ class NotchDropManager: ObservableObject {
             guard FileManager.default.fileExists(atPath: path) else { continue }
             let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
             guard !files.contains(where: { $0.url.path == url.path }) else { continue }
-            // Use the saved path as storage URL; originalURL is unknown after restart,
-            // so treat the storage path as the fallback original.
             files.append(StoredFile(url: url, originalURL: url))
         }
     }

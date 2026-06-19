@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dragTrigger?.orderFront(nil)
         registerKeyboardShortcut()
         if AppSettings.shared.rememberFiles { viewModel.restoreSavedFiles() }
-        viewModel.cleanOrphanedStorage()
+        viewModel.cleanOrphanedCache()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -166,9 +166,8 @@ extension AppDelegate: DragTriggerDelegate {
     }
 
     func hoverDidActivate() {
-        // Don't re-trigger if panel is already visible — that would cancel
-        // the running auto-hide timer and restart it indefinitely.
-        guard let window = notchWindow, !(window.isVisible && viewModel.isExpanded) else { return }
+        // Only show if panel is completely hidden.
+        guard let window = notchWindow, !window.isVisible else { return }
         notchWindow?.cancelHideIfNeeded()
         notchWindow?.orderFront(nil)
         notchWindow?.expandPanel()

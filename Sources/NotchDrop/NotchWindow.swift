@@ -50,7 +50,7 @@ final class NotchWindow: NSPanel {
         backgroundColor = .clear
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        hasShadow = false
+        hasShadow = true
         ignoresMouseEvents = false
         isMovable = false
         isReleasedWhenClosed = false

@@ -112,7 +112,7 @@ struct NotchPanelView: View {
                 Text("\(viewModel.files.count)\(L.files)").font(.system(size: 11)).foregroundColor(.secondary)
                 Button(action: { viewModel.selectAll() }) { Text("全选").font(.system(size: 9)) }
                     .buttonStyle(.plain).foregroundColor(.blue.opacity(0.7)).padding(.leading, 4)
-                Button(action: { viewModel.removeAll() }) { Image(systemName: "trash").font(.system(size: 10)) }
+                Button(action: { viewModel.removeAll() }) { Image(systemName: "arrowshape.turn.up.left").font(.system(size: 10)) }
                     .buttonStyle(.plain).foregroundColor(.secondary).help("全部移回原位置").padding(.leading, 4)
             } else {
                 Text("已选 \(viewModel.selectedFileIDs.count) 个").font(.system(size: 11)).foregroundColor(.blue)
@@ -205,20 +205,17 @@ struct SelectableFileRow: View {
             else { if isSelected { viewModel.openFile(file) } else { viewModel.selectOnly(file.id) } }
         }
         .onDrag {
-            let p = NSItemProvider(object: file.url as NSURL)
+            let p = NSItemProvider(object: file.originalURL as NSURL)
             p.suggestedName = file.name
-            // Multi‑selection: register all selected files on the pasteboard
             if isSelected && viewModel.selectedFileIDs.count > 1 {
                 for f in viewModel.selectedFiles where f.id != file.id {
-                    p.registerObject(f.url as NSURL, visibility: .all)
+                    p.registerObject(f.originalURL as NSURL, visibility: .all)
                 }
             }
             let toRemove = isSelected && viewModel.selectedFileIDs.count > 1
                 ? viewModel.selectedFiles
                 : [file]
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak vm = viewModel] in
-                for f in toRemove { vm?.removeFileFromPanel(f) }
-            }
+            for f in toRemove { viewModel.removeFileFromPanel(f) }
             return p
         }
         .contextMenu {
