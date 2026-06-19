@@ -116,9 +116,9 @@ class NotchDropManager: ObservableObject {
         persistFiles(); cleanOrphanedCache(); onFilesEmpty?()
     }
 
-    /// Drag-out — remove reference and evict cache immediately (no delay needed).
+    /// Drag-out — remove reference only.  Cache stays until the next
+    /// cleanup pass so the system can finish copying to the destination.
     func removeFileFromPanel(_ file: StoredFile) {
-        Self.evict(file.url)
         withAnimation(.easeOut(duration: 0.2)) {
             files.removeAll { $0.id == file.id }
             selectedFileIDs.remove(file.id)
