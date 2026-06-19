@@ -205,11 +205,11 @@ struct SelectableFileRow: View {
             else { if isSelected { viewModel.openFile(file) } else { viewModel.selectOnly(file.id) } }
         }
         .onDrag {
-            let p = NSItemProvider(object: file.originalURL as NSURL)
+            let p = NSItemProvider(object: file.url as NSURL)
             p.suggestedName = file.name
             if isSelected && viewModel.selectedFileIDs.count > 1 {
                 for f in viewModel.selectedFiles where f.id != file.id {
-                    p.registerObject(f.originalURL as NSURL, visibility: .all)
+                    p.registerObject(f.url as NSURL, visibility: .all)
                 }
             }
             let toRemove = isSelected && viewModel.selectedFileIDs.count > 1

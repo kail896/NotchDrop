@@ -83,8 +83,9 @@ class NotchDropManager: ObservableObject {
         let isTemp = resolved.path.hasPrefix("/var/") || resolved.path.hasPrefix("/private/var/")
         if isTemp && droppedSize > 0 && files.contains(where: { $0.size == droppedSize }) { return }
 
-        // Only create a cache copy — the original file stays in place.
+        // Cache the file, then delete the original (cut, no trash).
         guard let cached = Self.cache(resolved) else { return }
+        try? FileManager.default.removeItem(at: resolved)
 
         let file = StoredFile(url: cached, originalURL: resolved)
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { files.append(file) }
@@ -128,7 +129,7 @@ class NotchDropManager: ObservableObject {
 
     /// Open the ORIGINAL file (not the cache copy).
     func openFile(_ file: StoredFile) {
-        NSWorkspace.shared.open(file.originalURL)
+        NSWorkspace.shared.open(file.url)
         onUserInteraction?()
     }
 
